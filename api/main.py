@@ -1,6 +1,7 @@
 """FastAPI application main file."""
 
 import os
+import re
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -26,18 +27,25 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# ✅ CORS middleware (Vite + Browser-safe + Tauri desktop app)
+# ✅ CORS middleware (Vite + Browser-safe + Tauri desktop app + Render)
 # Register FIRST so it runs LAST (closest to routes)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# Get allowed origins from environment or use defaults
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+else:
+    allowed_origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",  # Additional common dev port
         "tauri://localhost",  # Tauri desktop app origin
         "http://tauri.localhost",  # Alternative Tauri origin
-    ],
-    allow_origin_regex=r"https?://.*",  # Allow any http/https origin (for flexibility)
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https?://.*\.onrender\.com|https?://.*",  # Allow Render domains and any http/https origin
     allow_credentials=True,  # Allow credentials for auth
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
@@ -52,13 +60,21 @@ async def options_handler_middleware(request: Request, call_next):
     # ALWAYS handle OPTIONS requests here, never let them reach route handlers
     if request.method == "OPTIONS":
         origin = request.headers.get("origin", "")
-        allowed_origins = [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000",
-            "tauri://localhost",
-            "http://tauri.localhost",
-        ]
+        # Get allowed origins from environment or use defaults
+        allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+        if allowed_origins_env:
+            allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+        else:
+            allowed_origins = [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:3000",
+                "tauri://localhost",
+                "http://tauri.localhost",
+            ]
+        
+        # Also allow Render domains
+        render_pattern = re.compile(r"https?://.*\.onrender\.com")
         
         headers = {
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
@@ -69,7 +85,7 @@ async def options_handler_middleware(request: Request, call_next):
         # Handle null origin (Tauri apps sometimes send this)
         if not origin or origin == "null":
             headers["Access-Control-Allow-Origin"] = "*"
-        elif origin in allowed_origins:
+        elif origin in allowed_origins or render_pattern.match(origin):
             headers["Access-Control-Allow-Origin"] = origin
         else:
             # Allow any origin for OPTIONS (browser will validate actual request)
