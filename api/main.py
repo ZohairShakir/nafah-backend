@@ -82,13 +82,17 @@ async def options_handler_middleware(request: Request, call_next):
             "Access-Control-Max-Age": "3600",
         }
         
-        # Handle null origin (Tauri apps sometimes send this)
-        if not origin or origin == "null":
+        # Handle null origin (Tauri apps send this) or missing origin
+        if not origin or origin == "null" or origin == "undefined":
+            # For Tauri desktop apps, allow any origin
             headers["Access-Control-Allow-Origin"] = "*"
+            # Also allow credentials if needed (though * with credentials won't work in browsers)
+            # This is fine for Tauri apps which don't follow same-origin policy strictly
         elif origin in allowed_origins or render_pattern.match(origin):
             headers["Access-Control-Allow-Origin"] = origin
         else:
-            # Allow any origin for OPTIONS (browser will validate actual request)
+            # Allow any origin for OPTIONS preflight (browser will validate actual request)
+            # This is safe for OPTIONS requests
             headers["Access-Control-Allow-Origin"] = "*"
         
         return Response(status_code=200, headers=headers)
@@ -136,6 +140,62 @@ async def general_exception_handler(request, exc: Exception):
 @app.on_event("startup")
 async def startup_event():
     logger.info("Lucid Backend API starting up...")
+    
+    # Initialize database if it doesn't exist or is missing tables
+    try:
+        import sys
+        from pathlib import Path
+        import sqlite3
+        
+        # Import init_database function
+        scripts_dir = Path(__file__).parent.parent
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        
+        from scripts.init_db import init_database
+        
+        db_path = os.getenv("DATABASE_PATH", "data/nafah.db")
+        logger.info(f"Checking database at: {db_path}")
+        
+        # Ensure data directory exists
+        db_file = Path(db_path)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Check if database file exists and has required tables
+        needs_init = False
+        if not db_file.exists():
+            logger.info("Database file not found. Initializing database...")
+            needs_init = True
+        else:
+            # Verify users table exists
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+                if not cursor.fetchone():
+                    logger.info("Users table not found. Initializing database...")
+                    needs_init = True
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Error checking database: {e}. Reinitializing...")
+                needs_init = True
+        
+        if needs_init:
+            init_database(db_path)
+            logger.info("Database initialized successfully")
+        else:
+            logger.info("Database already initialized")
+            
+    except Exception as e:
+        logger.error(f"Error initializing database on startup: {e}", exc_info=True)
+        # Try to initialize anyway (might fail, but better than silent failure)
+        try:
+            from scripts.init_db import init_database
+            db_path = os.getenv("DATABASE_PATH", "data/nafah.db")
+            init_database(db_path)
+            logger.info("Database initialized after error")
+        except:
+            logger.error("Failed to initialize database. Please run 'python scripts/init_db.py' manually.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
