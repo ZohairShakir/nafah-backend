@@ -13,6 +13,8 @@ from services.analytics import (
 from services.insights.rules import risk_rules, growth_rules, efficiency_rules
 from services.insights.rules import profitability_rules
 from services.insights.scorer import score_confidence
+from services.insights.nafah_guidance import generate_nafah_guidance
+from services.insights.data_quality import calculate_data_quality
 from utils.logging import setup_logging
 
 logger = setup_logging()
@@ -71,10 +73,12 @@ async def generate_insights(
     )
     insights.insert(0, nafah_guidance)  # Put main guidance first
     
+    # Calculate data quality for confidence scoring
+    data_quality = await calculate_data_quality(db, dataset_id)
+    
     # Store insights in database
     for insight in insights:
-        # Calculate final confidence with data quality
-        data_quality = {'completeness': 0.8}  # TODO: Calculate actual data quality
+        # Calculate final confidence with actual data quality
         insight['confidence'] = score_confidence(insight, data_quality)
         
         # Store in database

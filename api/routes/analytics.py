@@ -15,6 +15,7 @@ from services.analytics import (
     profitability,
     trends
 )
+from services.analytics import daily_sales
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
@@ -169,6 +170,31 @@ async def get_trends(
             "dataset_id": dataset_id,
             "analytics_type": "trends",
             "metric": metric,
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/daily-sales")
+async def get_daily_sales(
+    dataset_id: str,
+    year: int = Query(..., ge=2000, le=2100, description="Year (e.g., 2024)"),
+    month: int = Query(..., ge=1, le=12, description="Month (1-12)")
+):
+    """Get daily sales for a specific month."""
+    db = Database(DB_PATH)
+    cache = CacheManager()
+    
+    try:
+        results = await daily_sales.compute_daily_sales(
+            db, cache, dataset_id, year, month
+        )
+        return {
+            "dataset_id": dataset_id,
+            "analytics_type": "daily_sales",
+            "year": year,
+            "month": month,
             "results": results
         }
     except Exception as e:

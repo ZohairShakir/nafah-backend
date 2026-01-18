@@ -380,6 +380,63 @@ async def get_dataset(
     return DatasetResponse(**result)
 
 
+@router.get("/{dataset_id}/export")
+async def export_dataset(
+    dataset_id: str,
+    format: str = Query("csv", description="Export format: csv, json"),
+    authorization: Optional[str] = Header(None),
+    user: dict = Depends(get_current_user)
+):
+    """Export dataset data in specified format."""
+    db = Database(DB_PATH)
+    
+    # Verify dataset exists and user has access
+    dataset = await db.get_dataset(dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    if dataset.get('user_id') != user.get('id'):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get sales data
+    sales_query = """
+        SELECT date, product_name, product_id, quantity, unit_price, total_amount, category
+        FROM raw_sales
+        WHERE dataset_id = ?
+        ORDER BY date DESC
+    """
+    sales_rows = await db.execute_query(sales_query, (dataset_id,))
+    
+    if format.lower() == 'json':
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content={
+            'dataset_id': dataset_id,
+            'dataset_name': dataset.get('name', ''),
+            'export_date': datetime.now().isoformat(),
+            'row_count': len(sales_rows),
+            'data': sales_rows
+        })
+    else:  # CSV
+        import csv
+        import io
+        from fastapi.responses import StreamingResponse
+        
+        output = io.StringIO()
+        if sales_rows:
+            writer = csv.DictWriter(output, fieldnames=sales_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(sales_rows)
+        
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={dataset.get('name', 'dataset')}_export.csv"
+            }
+        )
+
+
 @router.delete("/{dataset_id}")
 async def delete_dataset(
     dataset_id: str,
@@ -410,25 +467,65 @@ async def delete_dataset(
         )
     
     try:
-        # Delete file
-        file_path = Path(dataset['file_path'])
+        # 1. Delete uploaded file
+        file_path = Path(dataset.get('file_path', ''))
         if file_path.exists():
-            file_path.unlink()
+            try:
+                file_path.unlink()
+                logger.info(f"Deleted file: {file_path}")
+            except Exception as file_err:
+                logger.warning(f"Failed to delete file {file_path}: {file_err}")
         
-        # Delete cache
+        # 2. Delete all cache entries for this dataset
         cache = CacheManager()
-        cache.delete(dataset_id)
+        try:
+            cache.delete(dataset_id)
+            logger.info(f"Deleted cache for dataset {dataset_id}")
+        except Exception as cache_err:
+            logger.warning(f"Failed to delete cache: {cache_err}")
         
-        # Delete from database (CASCADE will handle related records)
+        # 3. Explicitly delete all related data (in case CASCADE doesn't work)
+        # Delete raw sales data
+        await db.execute_write(
+            "DELETE FROM raw_sales WHERE dataset_id = ?",
+            (dataset_id,)
+        )
+        
+        # Delete raw inventory data
+        await db.execute_write(
+            "DELETE FROM raw_inventory WHERE dataset_id = ?",
+            (dataset_id,)
+        )
+        
+        # Delete insights
+        await db.execute_write(
+            "DELETE FROM insights WHERE dataset_id = ?",
+            (dataset_id,)
+        )
+        
+        # Delete analytics cache entries
+        await db.execute_write(
+            "DELETE FROM analytics_cache WHERE dataset_id = ?",
+            (dataset_id,)
+        )
+        
+        # Delete dataset sharing entries
+        await db.execute_write(
+            "DELETE FROM dataset_sharing WHERE dataset_id = ?",
+            (dataset_id,)
+        )
+        
+        # 4. Finally delete the dataset record itself
         await db.execute_write(
             "DELETE FROM datasets WHERE id = ?",
             (dataset_id,)
         )
         
-        return {"success": True, "message": "Dataset deleted successfully"}
+        logger.info(f"Successfully deleted dataset {dataset_id} and all related data")
+        return {"success": True, "message": "Dataset and all associated data deleted successfully"}
         
     except Exception as e:
-        logger.error(f"Error deleting dataset: {e}")
+        logger.error(f"Error deleting dataset {dataset_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete dataset: {str(e)}"
