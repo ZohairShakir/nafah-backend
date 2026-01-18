@@ -11,6 +11,7 @@ from services.analytics import (
     inventory
 )
 from services.insights.rules import risk_rules, growth_rules, efficiency_rules
+from services.insights.rules import profitability_rules
 from services.insights.scorer import score_confidence
 from utils.logging import setup_logging
 
@@ -56,6 +57,20 @@ async def generate_insights(
     # Evaluate efficiency rules
     insights.extend(efficiency_rules.evaluate_low_margin_rule(profitability_data))
     
+    # Evaluate profitability rules
+    insights.extend(profitability_rules.evaluate_high_profit_opportunity(profitability_data, best_sellers_data))
+    insights.extend(profitability_rules.evaluate_profit_concentration(best_sellers_data, profitability_data))
+    
+    # Generate main Nafah Guidance (comprehensive shopkeeper-friendly report)
+    nafah_guidance = generate_nafah_guidance(
+        best_sellers_data,
+        dead_stock_data,
+        profitability_data,
+        inventory_data,
+        seasonal_data
+    )
+    insights.insert(0, nafah_guidance)  # Put main guidance first
+    
     # Store insights in database
     for insight in insights:
         # Calculate final confidence with data quality
@@ -63,6 +78,17 @@ async def generate_insights(
         insight['confidence'] = score_confidence(insight, data_quality)
         
         # Store in database
+        # Handle guidance_format for Nafah Guidance
+        supporting_metrics = insight.get('supporting_metrics', {})
+        if 'guidance_format' in insight:
+            supporting_metrics = insight['guidance_format']
+        
+        recommended_action = insight.get('recommended_action', '')
+        if not recommended_action and 'guidance_format' in insight:
+            # For Nafah Guidance, use quick_summary as recommended_action
+            guidance = insight['guidance_format']
+            recommended_action = guidance.get('quick_summary', 'Nafah Guidance available')
+        
         await db.execute_write(
             """INSERT INTO insights 
                (dataset_id, insight_id, title, category, confidence, 
@@ -74,8 +100,8 @@ async def generate_insights(
                 insight['title'],
                 insight['category'],
                 insight['confidence'],
-                json.dumps(insight['supporting_metrics']),
-                insight['recommended_action']
+                json.dumps(supporting_metrics),
+                recommended_action
             )
         )
     
