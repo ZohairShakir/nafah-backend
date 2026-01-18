@@ -46,7 +46,7 @@ def init_database(db_path: str = "data/nafah.db"):
                     cursor.execute(f"DROP INDEX IF EXISTS {index[0]}")
             conn.commit()
         
-        # Execute schema
+        # Always execute schema (uses IF NOT EXISTS so safe)
         with open(schema_file, "r", encoding="utf-8") as f:
             schema_sql = f.read()
             # Replace CREATE INDEX with CREATE INDEX IF NOT EXISTS for compatibility
@@ -54,6 +54,27 @@ def init_database(db_path: str = "data/nafah.db"):
             schema_sql = schema_sql.replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ")
             conn.executescript(schema_sql)
         conn.commit()
+        
+        # Ensure users table exists (double-check)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        users_exists = cursor.fetchone()
+        if not users_exists:
+            print("Creating users table...")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    shop_name TEXT,
+                    company_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+            conn.commit()
+        
         print(f"Database initialized successfully at {db_path}")
     except Exception as e:
         print(f"Error initializing database: {e}")

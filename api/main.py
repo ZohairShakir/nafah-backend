@@ -139,7 +139,42 @@ async def general_exception_handler(request, exc: Exception):
 
 @app.on_event("startup")
 async def startup_event():
+    """Initialize database and ensure all tables exist."""
     logger.info("Lucid Backend API starting up...")
+    
+    # Ensure users table exists (if database was created before users table was added)
+    try:
+        from storage.database import Database
+        db_path = os.getenv("DATABASE_PATH", "data/nafah.db")
+        db = Database(db_path)
+        
+        # Check if users table exists
+        result = await db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'",
+            ()
+        )
+        
+        if not result:
+            logger.warning("Users table not found. Creating...")
+            # Create users table
+            await db.execute_write("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    shop_name TEXT,
+                    company_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.execute_write("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+            logger.info("Users table created successfully")
+        else:
+            logger.info("Database tables verified")
+    except Exception as e:
+        logger.error(f"Error checking database tables on startup: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
