@@ -83,8 +83,19 @@ async def compute_best_sellers(
     # Select top N
     result_df = aggregated.head(limit)
     
-    # Convert to dict
-    results = result_df.to_dict('records')
+    # Convert to dict and normalize field names for frontend
+    results = []
+    for _, row in result_df.iterrows():
+        results.append({
+            'product_name': row['product_name'],
+            'product_id': row.get('product_id'),
+            'total_quantity': float(row['quantity']),  # Map quantity -> total_quantity for frontend
+            'quantity': float(row['quantity']),  # Keep both for backward compatibility
+            'total_amount': float(row['total_amount']),
+            'total_revenue': float(row['total_amount']),  # Map total_amount -> total_revenue
+            'category': row.get('category'),
+            'rank': int(row['rank'])
+        })
     
     # Cache results
     cache.write(dataset_id, cache_key, result_df)

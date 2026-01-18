@@ -16,6 +16,7 @@ from services.analytics import (
     trends
 )
 from services.analytics import daily_sales
+from services.ml import predictions
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
@@ -196,6 +197,71 @@ async def get_daily_sales(
             "year": year,
             "month": month,
             "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/ml/sales-forecast")
+async def get_sales_forecast(
+    dataset_id: str,
+    days_ahead: int = Query(7, ge=1, le=30, description="Days to forecast ahead"),
+    product_id: Optional[str] = Query(None, description="Optional product ID for specific forecast")
+):
+    """Get ML-based sales forecast for next N days."""
+    db = Database(DB_PATH)
+    cache = CacheManager()
+    
+    try:
+        result = await predictions.predict_sales_forecast(
+            db, cache, dataset_id, days_ahead, product_id
+        )
+        return {
+            "dataset_id": dataset_id,
+            "analytics_type": "ml_sales_forecast",
+            **result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/ml/anomalies")
+async def get_anomalies(
+    dataset_id: str,
+    threshold: float = Query(2.0, ge=1.0, le=5.0, description="Z-score threshold for anomaly detection")
+):
+    """Detect anomalies in sales data using ML."""
+    db = Database(DB_PATH)
+    cache = CacheManager()
+    
+    try:
+        results = await predictions.detect_anomalies(db, cache, dataset_id, threshold)
+        return {
+            "dataset_id": dataset_id,
+            "analytics_type": "ml_anomalies",
+            "threshold": threshold,
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/ml/demand-prediction/{product_id}")
+async def get_demand_prediction(
+    dataset_id: str,
+    product_id: str,
+    days_ahead: int = Query(30, ge=7, le=90, description="Days to predict ahead")
+):
+    """Predict demand for a specific product with recommended stock level."""
+    db = Database(DB_PATH)
+    cache = CacheManager()
+    
+    try:
+        result = await predictions.predict_demand(db, cache, dataset_id, product_id, days_ahead)
+        return {
+            "dataset_id": dataset_id,
+            "analytics_type": "ml_demand_prediction",
+            **result
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -142,39 +142,49 @@ async def startup_event():
     """Initialize database and ensure all tables exist."""
     logger.info("Lucid Backend API starting up...")
     
-    # Ensure users table exists (if database was created before users table was added)
+    # Ensure all required tables exist
     try:
         from storage.database import Database
+        import aiosqlite
+        from pathlib import Path
+        
         db_path = os.getenv("DATABASE_PATH", "data/nafah.db")
-        db = Database(db_path)
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
-        # Check if users table exists
-        result = await db.execute_query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'",
-            ()
-        )
-        
-        if not result:
-            logger.warning("Users table not found. Creating...")
-            # Create users table
-            await db.execute_write("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    email TEXT NOT NULL UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    shop_name TEXT,
-                    company_name TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            await db.execute_write("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-            logger.info("Users table created successfully")
-        else:
-            logger.info("Database tables verified")
+        # Check if main tables exist - if not, run full schema initialization
+        async with aiosqlite.connect(db_path) as conn:
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='datasets'")
+            datasets_exists = await cursor.fetchone()
+            
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            users_exists = await cursor.fetchone()
+            
+            if not datasets_exists or not users_exists:
+                logger.warning("Database schema incomplete. Initializing...")
+                # Run init_db script to create all tables
+                import subprocess
+                import sys
+                script_path = Path(__file__).parent.parent / "scripts" / "init_db.py"
+                if script_path.exists():
+                    subprocess.run([sys.executable, str(script_path)], check=False)
+                    logger.info("Database schema initialized")
+                else:
+                    # Fallback: create essential tables directly
+                    logger.warning("init_db.py not found, creating tables directly...")
+                    schema_file = Path(__file__).parent.parent / "DATABASE_SCHEMA.sql"
+                    if schema_file.exists():
+                        with open(schema_file, "r", encoding="utf-8") as f:
+                            schema_sql = f.read()
+                            schema_sql = schema_sql.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+                            schema_sql = schema_sql.replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ")
+                            await conn.executescript(schema_sql)
+                        await conn.commit()
+                        logger.info("Database tables created from schema")
+            else:
+                logger.info("Database tables verified")
     except Exception as e:
-        logger.error(f"Error checking database tables on startup: {e}")
+        logger.error(f"Error initializing database on startup: {e}")
+        # Don't fail startup, but log the error
 
 @app.on_event("shutdown")
 async def shutdown_event():
